@@ -1,6 +1,10 @@
 """Join the DR dashboard and the DR RRG dashboard into one Netlify site.
 
-    python netlify_nav.py <stage dir> <dr_rrg_combined.html>
+    python netlify_nav.py <stage dir> [<dr_rrg_combined.html>] [--rrg-href URL]
+
+--rrg-href points the "DR RRG" tab somewhere other than rrg.html beside the page:
+deploy_dashboard.ps1 uses it for the GitHub Pages copy of the DR dashboard, whose
+RRG page lives in another repo (pridil.github.io/dr-rrg-live/rrg.html).
 
 Run by deploy_netlify.ps1 after it has staged index.html (the DR dashboard).
 Writes rrg.html (the DR RRG dashboard) beside it and puts the same tab bar,
@@ -38,17 +42,17 @@ CSS = """<style>
 """
 
 
-def bar(active: str, width: str, pad: str) -> str:
+def bar(active: str, width: str, pad: str, rrg_href: str = "rrg.html") -> str:
     def tab(href, label, key):
         cur = ' aria-current="page"' if key == active else ""
         return f'<a href="{href}"{cur}>{label}</a>'
     return (CSS % {"w": width, "pad": pad}
             + f'<nav class="{MARK}" aria-label="Dashboards"><div class="yr-nav-in">'
-            + tab("./", "DR Dashboard", "dash") + tab("rrg.html", "DR RRG", "rrg")
+            + tab("./", "DR Dashboard", "dash") + tab(rrg_href, "DR RRG", "rrg")
             + "</div></nav>\n")
 
 
-def main(stage: Path, rrg_src: Path | None) -> int:
+def main(stage: Path, rrg_src: Path | None, rrg_href: str = "rrg.html") -> int:
     """rrg_src None = tab bar on index.html only. The weekly Netlify deploy does that
     once the DR RRG page comes from GitHub Pages through a rewrite (_redirects)."""
     index = stage / "index.html"
@@ -59,7 +63,7 @@ def main(stage: Path, rrg_src: Path | None) -> int:
         # The DR dashboard has no <body> tag (it is deliberately in quirks mode), so the
         # bar goes straight after its one stylesheet, ahead of <div class="wrap">.
         cut = html.index("</style>") + len("</style>")
-        html = html[:cut] + "\n" + bar("dash", "1180px", "20px") + html[cut:]
+        html = html[:cut] + "\n" + bar("dash", "1180px", "20px", rrg_href) + html[cut:]
         index.write_text(html, encoding="utf-8")
 
     if rrg_src is None:
@@ -75,4 +79,10 @@ def main(stage: Path, rrg_src: Path | None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(Path(sys.argv[1]), Path(sys.argv[2]) if len(sys.argv) > 2 else None))
+    args = sys.argv[1:]
+    href = "rrg.html"
+    if "--rrg-href" in args:
+        i = args.index("--rrg-href")
+        href = args[i + 1]
+        del args[i:i + 2]
+    sys.exit(main(Path(args[0]), Path(args[1]) if len(args) > 1 else None, href))

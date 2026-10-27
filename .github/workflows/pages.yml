@@ -27,6 +27,7 @@ env:
   TZ: Asia/Bangkok              # the builders drop bars dated "today" - Bangkok's today
   PYTHONIOENCODING: utf-8
   NETLIFY_URL: https://yuantaresearch-dr-dashboard.netlify.app
+  GITHUB_DR_URL: https://pridil.github.io/dr-dashboard/
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -69,10 +70,11 @@ jobs:
         run: |
           mkdir -p site
           python "DR Dashboard/netlify_nav.py" site "DR RRG/dr_rrg_combined.html"
-          # The Netlify address is the official one: say so to search engines, and send
-          # anyone who opens this GitHub copy's root to the dashboard itself.
+          # The Netlify address is the official one: say so to search engines.
           sed -i "s#</head>#<link rel=\"canonical\" href=\"$NETLIFY_URL/rrg.html\">\n</head>#" site/rrg.html
-          printf '<!DOCTYPE html><meta charset="utf-8"><title>DR Dashboard</title><meta http-equiv="refresh" content="0; url=%s/"><link rel="canonical" href="%s/"><p><a href="%s/">%s/</a></p>\n' "$NETLIFY_URL" "$NETLIFY_URL" "$NETLIFY_URL" "$NETLIFY_URL" > site/index.html
+          # The page's "DR Dashboard" tab links to ./ - on Netlify that is the DR dashboard;
+          # here it is this stub, which hands over to the GitHub copy of the DR dashboard.
+          printf '<!DOCTYPE html><meta charset="utf-8"><title>DR Dashboard</title><meta http-equiv="refresh" content="0; url=%s"><link rel="canonical" href="%s/"><p><a href="%s">%s</a></p>\n' "$GITHUB_DR_URL" "$NETLIFY_URL" "$GITHUB_DR_URL" "$GITHUB_DR_URL" > site/index.html
           touch site/.nojekyll
           echo "stamp=$(grep -o 'built [0-9: -]*[0-9]' site/rrg.html | head -1)" >> "$GITHUB_OUTPUT"
           ls -la site
