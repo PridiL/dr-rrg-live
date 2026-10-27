@@ -1,0 +1,123 @@
+# DR RRG daily refresh, Mon-Fri 07:30 Bangkok, on GitHub's servers (laptop on or off).
+#
+# Publishes to GitHub Pages (https://pridil.github.io/dr-rrg-live/rrg.html). The page
+# people use is https://yuantaresearch-dr-dashboard.netlify.app/rrg.html: Netlify
+# serves it from here through a rewrite rule deployed once with the DR Dashboard, so
+# a daily update costs NO Netlify deploy credits. (Deploying to Netlify every weekday
+# needed 22 x 15 credits a month - more than the free plan's 300 - and a team that runs
+# out has every site paused until the next billing cycle.)
+#
+# Steps: build (retry while MSCI World lags) -> session check -> privacy scan ->
+# add the tab bar -> publish to Pages -> confirm the Netlify URL shows this build.
+# Fails (red run + GitHub email) on any error, or when a market is missing the
+# previous trading day (that case still publishes first). Uses no secrets.
+name: DR RRG daily
+on:
+  schedule:
+    - cron: "30 0 * * 1-5"      # 00:30 UTC = 07:30 Bangkok, Monday-Friday
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: dr-rrg-pages
+  cancel-in-progress: false
+env:
+  TZ: Asia/Bangkok              # the builders drop bars dated "today" - Bangkok's today
+  PYTHONIOENCODING: utf-8
+  NETLIFY_URL: https://yuantaresearch-dr-dashboard.netlify.app
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      sessions: ${{ steps.sessions.outputs.code }}
+      stamp: ${{ steps.site.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: pip install -r requirements.txt
+
+      - name: Build (retry while MSCI World has not published the previous weekday)
+        working-directory: DR RRG
+        run: |
+          for try in 1 2 3 4; do
+            python build_country_rrg.py && python build_rrg_table.py && python combine_rrg.py
+            read world want < <(python -c "import json,datetime as d,check_sessions as c; print(json.load(open('country_rrg_data.json'))['meta']['world_last'], c.expected_session(d.date.today()))")
+            echo "MSCI World newest level $world (want $want)"
+            [ "$world" \> "$want" ] || [ "$world" = "$want" ] && break
+            if [ $try -lt 4 ]; then echo "retrying in 15 min ($try/4)"; sleep 900; else echo "::warning::MSCI World still at $world - publishing; countries graph sits a day behind"; fi
+          done
+
+      - name: Session check (previous trading day for every market)
+        id: sessions
+        working-directory: DR RRG
+        run: |
+          set +e
+          python check_sessions.py; code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          [ $code -eq 4 ] && echo "::warning::a market is missing the previous trading day - see the WARNING lines"
+          [ $code -eq 0 ] || [ $code -eq 4 ]
+
+      - name: Privacy scan
+        run: python tools/privacy_scan.py "DR RRG/dr_rrg_combined.html"
+
+      - name: Assemble the Pages site
+        id: site
+        run: |
+          mkdir -p site
+          python "DR Dashboard/netlify_nav.py" site "DR RRG/dr_rrg_combined.html"
+          # The Netlify address is the official one: say so to search engines, and send
+          # anyone who opens this GitHub copy's root to the dashboard itself.
+          sed -i "s#</head>#<link rel=\"canonical\" href=\"$NETLIFY_URL/rrg.html\">\n</head>#" site/rrg.html
+          printf '<!DOCTYPE html><meta charset="utf-8"><title>DR Dashboard</title><meta http-equiv="refresh" content="0; url=%s/"><link rel="canonical" href="%s/"><p><a href="%s/">%s/</a></p>\n' "$NETLIFY_URL" "$NETLIFY_URL" "$NETLIFY_URL" "$NETLIFY_URL" > site/index.html
+          touch site/.nojekyll
+          echo "stamp=$(grep -o 'built [0-9: -]*[0-9]' site/rrg.html | head -1)" >> "$GITHUB_OUTPUT"
+          ls -la site
+
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dr-rrg-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            DR RRG/dr_rrg_combined.html
+            DR RRG/country_rrg_data.json
+            DR RRG/rrg_table_data.json
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}rrg.html
+    steps:
+      - id: pages
+        uses: actions/deploy-pages@v4
+
+  verify:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm the Netlify URL shows this build
+        run: |
+          # GitHub Pages lets caches keep a page ~10 minutes, so allow up to 15.
+          want="${{ needs.build.outputs.stamp }}"
+          for i in $(seq 1 30); do
+            body=$(curl -s "$NETLIFY_URL/rrg.html?v=$RANDOM$RANDOM")
+            if grep -q "$want" <<<"$body" && grep -q 'class="yr-nav"' <<<"$body"; then
+              echo "OK: $NETLIFY_URL/rrg.html shows '$want' with the tab bar"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::$NETLIFY_URL/rrg.html did not show '$want' within 15 minutes"; exit 1
+      - name: Fail the run if a market missed the previous trading day
+        if: needs.build.outputs.sessions == '4'
+        run: |
+          echo "Published, but at least one market is missing the previous trading day (see the build job's 'Session check')."
+          exit 1
