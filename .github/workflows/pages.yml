@@ -41,16 +41,26 @@ jobs:
         with: { python-version: "3.13" }
       - run: pip install -r requirements.txt
 
-      - name: Build (retry while MSCI World has not published the previous weekday)
+      - name: Build (retry on a failed build, or while MSCI World lags the previous weekday)
         working-directory: DR RRG
         run: |
+          # A build can fail on a passing Yahoo/yfinance hiccup (2026-10-27: "database is
+          # locked" on 000001.SS); the builders then refuse to write, so just try again.
+          ok=0
           for try in 1 2 3 4; do
-            python build_country_rrg.py && python build_rrg_table.py && python combine_rrg.py
-            read world want < <(python -c "import json,datetime as d,check_sessions as c; print(json.load(open('country_rrg_data.json'))['meta']['world_last'], c.expected_session(d.date.today()))")
-            echo "MSCI World newest level $world (want $want)"
-            [ "$world" \> "$want" ] || [ "$world" = "$want" ] && break
-            if [ $try -lt 4 ]; then echo "retrying in 15 min ($try/4)"; sleep 900; else echo "::warning::MSCI World still at $world - publishing; countries graph sits a day behind"; fi
+            if python build_country_rrg.py && python build_rrg_table.py && python combine_rrg.py; then
+              ok=1
+              read world want < <(python -c "import json,datetime as d,check_sessions as c; print(json.load(open('country_rrg_data.json'))['meta']['world_last'], c.expected_session(d.date.today()))")
+              echo "MSCI World newest level $world (want $want)"
+              if [[ ! "$world" < "$want" ]]; then break; fi
+              msg="MSCI World still at $world"; wait=900
+            else
+              ok=0; msg="build failed"; wait=120
+            fi
+            if [ $try -lt 4 ]; then echo "$msg - retrying in $wait s ($try/4)"; sleep $wait; fi
           done
+          [ $ok -eq 1 ] || { echo "::error::build failed 4 times - nothing published"; exit 1; }
+          [[ ! "$world" < "$want" ]] || echo "::warning::MSCI World still at $world - publishing; countries graph sits a day behind"
 
       - name: Session check (previous trading day for every market)
         id: sessions
