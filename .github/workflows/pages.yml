@@ -15,6 +15,10 @@ name: DR RRG daily
 on:
   schedule:
     - cron: "30 0 * * 1-5"      # 00:30 UTC = 07:30 Bangkok, Monday-Friday
+    # Backup, 08:15 Bangkok: GitHub may start a scheduled run late or skip it when busy
+    # (2026-10-28: the 07:30 run never started). Builds only if the page does not
+    # already show today's build - see the gate job.
+    - cron: "15 1 * * 1-5"
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,8 +32,29 @@ env:
   PYTHONIOENCODING: utf-8
   NETLIFY_URL: https://yuantaresearch-dr-dashboard.netlify.app
   GITHUB_DR_URL: https://pridil.github.io/dr-dashboard/
+  PAGES_URL: https://pridil.github.io/dr-rrg-live/rrg.html
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        run: |
+          # Only the 08:15 backup is gated; the 07:30 run and manual runs always build.
+          if [ "${{ github.event.schedule }}" != "15 1 * * 1-5" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          today=$(date +%F)    # Bangkok date (TZ above)
+          have=$(curl -s "$PAGES_URL?v=$RANDOM$RANDOM" | grep -o 'built [0-9-]*' | head -1)
+          echo "backup run: page shows '$have', today is $today"
+          if [ "$have" = "built $today" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "Today's build is already published - nothing to do."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "The 07:30 run did not publish today - building now."
+          fi
+
   build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
