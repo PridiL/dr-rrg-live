@@ -11,15 +11,24 @@
 # add the tab bar -> publish to Pages -> confirm the Netlify URL shows this build.
 # Fails (red run + GitHub email) on any error, or when a market is missing the
 # previous trading day (that case still publishes first). Uses no secrets.
+#
+# WHAT STARTS IT: GitHub's own schedule proved useless for a 07:30 deadline here (Wed
+# 2026-10-28 the 07:30 run started at 12:59; Thu 10-29 neither cron had started by 09:49).
+# So an external scheduler (cron-job.org, user's account) calls the workflow_dispatch API
+# on time: 07:30 Bangkok -> build; 08:15 -> backup=true (builds only if today's page is
+# missing). The crons below stay as a last resort and are gated the same way, so a run
+# that arrives hours late does nothing once today's page is up.
 name: DR RRG daily
 on:
   schedule:
     - cron: "30 0 * * 1-5"      # 00:30 UTC = 07:30 Bangkok, Monday-Friday
-    # Backup, 08:15 Bangkok: GitHub may start a scheduled run late or skip it when busy
-    # (2026-10-28: the 07:30 run never started). Builds only if the page does not
-    # already show today's build - see the gate job.
-    - cron: "15 1 * * 1-5"
+    - cron: "15 1 * * 1-5"      # 08:15 Bangkok
   workflow_dispatch:
+    inputs:
+      backup:
+        description: "Backup call: build only if the page does not already show today's build"
+        type: boolean
+        default: false
 permissions:
   contents: read
   pages: write
@@ -41,15 +50,19 @@ jobs:
     steps:
       - id: check
         run: |
-          # Only the 08:15 backup is gated; the 07:30 run and manual runs always build.
-          if [ "${{ github.event.schedule }}" != "15 1 * * 1-5" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # A run-now call (cron-job.org's 07:30 call, or a manual run) always builds.
+          # Backup calls and GitHub's own (often hours-late) schedule build only if
+          # today's page is missing.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.backup }}" != "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "run-now call - building"; exit 0
+          fi
           today=$(date +%F)    # Bangkok date (TZ above)
           have=$(curl -s "$PAGES_URL?v=$RANDOM$RANDOM" | grep -o 'built [0-9-]*' | head -1)
-          echo "backup run: page shows '$have', today is $today"
+          echo "${{ github.event_name }} backup check: page shows '$have', today is $today"
           if [ "$have" = "built $today" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"; echo "Today's build is already published - nothing to do."
           else
-            echo "run=true" >> "$GITHUB_OUTPUT"; echo "The 07:30 run did not publish today - building now."
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "Today's page is missing - building now."
           fi
 
   build:
